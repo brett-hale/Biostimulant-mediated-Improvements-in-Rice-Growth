@@ -1,0 +1,1993 @@
+---
+title: "Rice_Final"
+author: "BH"
+date: "2024-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+```{r}
+##load libraries for general purposes
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(MetBrewer)
+library(car)
+library(MASS)
+library(purr)
+library(broom)
+
+```
+
+```{r}
+##Let's start with growth for the first 17 days
+vis.metrics <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/vis.metrics.csv")
+
+vis.metrics$DAG <- as.character(vis.metrics$DAG)
+
+##The instrument had difficulty recording measures for all plants at some DAG. Therefore, remove "0" values before statistical analysis.
+# Identify numeric columns
+numeric_cols <- sapply(vis.metrics, is.numeric)
+
+# Remove rows with any zero in numeric columns
+vis.metrics.2 <- vis.metrics[!apply(vis.metrics[, numeric_cols], 1, function(x) any(x == 0)), ]
+
+##Proceed to statistical analysis in subsequent chunks
+
+```
+
+```{r}
+##Projected Leaf Area
+# Convert DAG to factor
+vis.metrics.2$DAG <- as.factor(vis.metrics.2$DAG)
+
+# List to hold results for Projected.Leaf.Area
+results_ProjectedLeafArea <- list()
+
+# Unique DAG levels in the vis.metrics.2 dataframe
+unique_DAGs_vismetrics2 <- unique(vis.metrics.2$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_vismetrics2) {
+    # Subset data for this DAG
+    data_subset <- vis.metrics.2[vis.metrics.2$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Projected.Leaf.Area)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Projected.Leaf.Area ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Projected.Leaf.Area ~ Treatment, data = data_subset)
+            results_ProjectedLeafArea[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Projected.Leaf.Area ~ Treatment, data = data_subset)
+            results_ProjectedLeafArea[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for Projected.Leaf.Area
+print(results_ProjectedLeafArea)
+
+# Summarize the data to obtain Mean and SEM for Projected.Leaf.Area for each Treatment and DAG
+vis_metrics2_summary <- vis.metrics.2 %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Projected.Leaf.Area),
+    SEM = sd(Projected.Leaf.Area) / sqrt(n()),
+    .groups = 'drop'
+  )
+vis_metrics2_summary$DAG <- as.factor(vis_metrics2_summary$DAG)
+
+# Create a dataframe for significance markers for Projected.Leaf.Area
+significance_markers_ProjectedLeafArea <- data.frame(DAG = character(), 
+                                                     Significance = character(), 
+                                                     y_position = numeric())
+
+# Iterate over results for Projected.Leaf.Area to extract significance markers
+for (DAG_level in names(results_ProjectedLeafArea)) {
+  result <- results_ProjectedLeafArea[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(vis_metrics2_summary$Mean[vis_metrics2_summary$DAG == DAG_clean] + max(vis_metrics2_summary$SEM[vis_metrics2_summary$DAG == DAG_clean]))
+    significance_markers_ProjectedLeafArea <- rbind(significance_markers_ProjectedLeafArea, 
+                                                    data.frame(DAG = DAG_clean, 
+                                                               Significance = significance, 
+                                                               y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_ProjectedLeafArea to factor to align with vis_metrics2_summary
+significance_markers_ProjectedLeafArea$DAG <- factor(significance_markers_ProjectedLeafArea$DAG, levels = levels(vis_metrics2_summary$DAG))
+
+# Update the levels of DAG to the specified order
+vis_metrics2_summary$DAG <- factor(vis_metrics2_summary$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Create the line plot with significance markers for Projected.Leaf.Area
+ggplot(vis_metrics2_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_ProjectedLeafArea, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = expression(bold("Projected Leaf Area (cm"^2*")")), x = expression(bold("Days After Germination (DAG)")), color = "Treatment")
+
+# Save the plot
+ggsave("projected_leaf_area_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Convex Hull Area
+# List to hold results for Convex.Hull.Area
+results_ConvexHullArea <- list()
+
+# Unique DAG levels in the vis.metrics.2 dataframe
+unique_DAGs_vismetrics2 <- unique(vis.metrics.2$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_vismetrics2) {
+    # Subset data for this DAG
+    data_subset <- vis.metrics.2[vis.metrics.2$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Convex.Hull.Area)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Convex.Hull.Area ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Convex.Hull.Area ~ Treatment, data = data_subset)
+            results_ConvexHullArea[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Convex.Hull.Area ~ Treatment, data = data_subset)
+            results_ConvexHullArea[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for Convex.Hull.Area
+print(results_ConvexHullArea)
+
+# Summarize the data to obtain Mean and SEM for Convex.Hull.Area for each Treatment and DAG
+vis_metrics2_summary_CHA <- vis.metrics.2 %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Convex.Hull.Area),
+    SEM = sd(Convex.Hull.Area) / sqrt(n()),
+    .groups = 'drop'
+  )
+vis_metrics2_summary_CHA$DAG <- as.factor(vis_metrics2_summary_CHA$DAG)
+
+# Create a dataframe for significance markers for Convex.Hull.Area
+significance_markers_ConvexHullArea <- data.frame(DAG = character(), 
+                                                  Significance = character(), 
+                                                  y_position = numeric())
+
+# Iterate over results for Convex.Hull.Area to extract significance markers
+for (DAG_level in names(results_ConvexHullArea)) {
+  result <- results_ConvexHullArea[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(vis_metrics2_summary_CHA$Mean[vis_metrics2_summary_CHA$DAG == DAG_clean] + max(vis_metrics2_summary_CHA$SEM[vis_metrics2_summary_CHA$DAG == DAG_clean]))
+    significance_markers_ConvexHullArea <- rbind(significance_markers_ConvexHullArea, 
+                                                 data.frame(DAG = DAG_clean, 
+                                                            Significance = significance, 
+                                                            y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_ConvexHullArea to factor to align with vis_metrics2_summary_CHA
+significance_markers_ConvexHullArea$DAG <- factor(significance_markers_ConvexHullArea$DAG, levels = levels(vis_metrics2_summary_CHA$DAG))
+
+# Update the levels of DAG to the specified order
+vis_metrics2_summary_CHA$DAG <- factor(vis_metrics2_summary_CHA$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Create the line plot with significance markers for Convex.Hull.Area
+ggplot(vis_metrics2_summary_CHA, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_ConvexHullArea, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = expression(bold("Convex Hull Area (cm"^2*")")), x = expression(bold("Days After Germination (DAG)")), color = "Treatment")
+
+# Save the plot
+ggsave("convex_hull_area_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Caliper Length
+# List to hold results for Caliper.Length
+results_CaliperLength <- list()
+
+# Unique DAG levels in the vis.metrics.2 dataframe
+unique_DAGs_vismetrics2 <- unique(vis.metrics.2$DAG)
+
+# Iterate over each DAG level for Caliper.Length
+for (DAG in unique_DAGs_vismetrics2) {
+    # Subset data for this DAG
+    data_subset <- vis.metrics.2[vis.metrics.2$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Caliper.Length)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Caliper.Length ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Caliper.Length ~ Treatment, data = data_subset)
+            results_CaliperLength[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Caliper.Length ~ Treatment, data = data_subset)
+            results_CaliperLength[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for Caliper.Length
+print(results_CaliperLength)
+
+# Summarize the data to obtain Mean and SEM for Caliper.Length for each Treatment and DAG
+vis_metrics2_summary_CL <- vis.metrics.2 %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Caliper.Length),
+    SEM = sd(Caliper.Length) / sqrt(n()),
+    .groups = 'drop'
+  )
+vis_metrics2_summary_CL$DAG <- as.factor(vis_metrics2_summary_CL$DAG)
+
+# Create a dataframe for significance markers for Caliper.Length
+significance_markers_CaliperLength <- data.frame(DAG = character(), 
+                                                 Significance = character(), 
+                                                 y_position = numeric())
+
+# Iterate over results for Caliper.Length to extract significance markers
+for (DAG_level in names(results_CaliperLength)) {
+  result <- results_CaliperLength[[DAG_level]]
+  
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level)
+    max_y <- max(vis_metrics2_summary_CL$Mean[vis_metrics2_summary_CL$DAG == DAG_clean] + max(vis_metrics2_summary_CL$SEM[vis_metrics2_summary_CL$DAG == DAG_clean]))
+    significance_markers_CaliperLength <- rbind(significance_markers_CaliperLength, 
+                                                data.frame(DAG = DAG_clean, 
+                                                           Significance = significance, 
+                                                           y_position = max_y))
+  }
+}
+
+significance_markers_CaliperLength$DAG <- factor(significance_markers_CaliperLength$DAG, levels = levels(vis_metrics2_summary_CL$DAG))
+
+vis_metrics2_summary_CL$DAG <- factor(vis_metrics2_summary_CL$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Create the line plot with significance markers for Caliper.Length
+ggplot(vis_metrics2_summary_CL, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_CaliperLength, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = expression(bold("Caliper Length (cm)")), x = expression(bold("Days After Germination (DAG)")), color = "Treatment")
+
+# Save the plot
+ggsave("caliper_length_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Compactness
+# List to hold results for Compactness
+results_Compactness <- list()
+
+# Unique DAG levels in the vis.metrics.2 dataframe
+unique_DAGs_vismetrics2 <- unique(vis.metrics.2$DAG)
+
+# Iterate over each DAG level for Compactness
+for (DAG in unique_DAGs_vismetrics2) {
+    # Subset data for this DAG
+    data_subset <- vis.metrics.2[vis.metrics.2$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Shapiro-Wilk test for normality on Compactness
+    shapiro_test <- shapiro.test(data_subset$Compactness)
+    
+    # Levene's test for homogeneity of variances on Compactness
+    levene_test <- leveneTest(Compactness ~ Treatment, data = data_subset)
+    
+    # Determine the type of test based on p-values
+    if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+        # Wilcoxon rank sum test
+        wilcox_result <- wilcox.test(Compactness ~ Treatment, data = data_subset)
+        results_Compactness[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+    } else {
+        # T-test
+        ttest_result <- t.test(Compactness ~ Treatment, data = data_subset)
+        results_Compactness[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+    }
+}
+
+# Output the results for Compactness
+print(results_Compactness)
+
+# Summarize the data to obtain Mean and SEM for Compactness for each Treatment and DAG
+vis_metrics2_summary_Compactness <- vis.metrics.2 %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Compactness),
+    SEM = sd(Compactness) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for Compactness
+significance_markers_Compactness <- data.frame(DAG = character(), 
+                                               Significance = character(), 
+                                               y_position = numeric())
+
+# Iterate over results for Compactness to extract significance markers
+for (DAG_level in names(results_Compactness)) {
+    result <- results_Compactness[[DAG_level]]
+    
+    p_value <- result$result$p.value
+    significance <- ifelse(p_value < 0.001, "***", 
+                           ifelse(p_value < 0.01, "**", 
+                                  ifelse(p_value < 0.05, "*", "")))
+    
+    if (significance != "") {
+        DAG_clean <- gsub("DAG_", "", DAG_level)
+        max_y <- max(vis_metrics2_summary_Compactness$Mean[vis_metrics2_summary_Compactness$DAG == DAG_clean] + max(vis_metrics2_summary_Compactness$SEM[vis_metrics2_summary_Compactness$DAG == DAG_clean]))
+        significance_markers_Compactness <- rbind(significance_markers_Compactness, 
+                                                  data.frame(DAG = DAG_clean, 
+                                                             Significance = significance, 
+                                                             y_position = max_y))
+    }
+}
+
+# Convert DAG in significance_markers_Compactness to factor to align with vis_metrics2_summary_Compactness
+significance_markers_Compactness$DAG <- factor(significance_markers_Compactness$DAG, levels = levels(vis_metrics2_summary_Compactness$DAG))
+
+# Update the levels of DAG in the summary to the specified order
+vis_metrics2_summary_Compactness$DAG <- factor(vis_metrics2_summary_Compactness$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Create the line plot with significance markers for Compactness
+ggplot(vis_metrics2_summary_Compactness, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_Compactness, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.5,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.225, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = expression(bold("Compactness")), x = expression(bold("Days After Germination (DAG)")), color = "Treatment")
+
+# Save the plot
+ggsave("compactness.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Fluorescence
+fluo <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/fluo.csv")
+
+##Remove missing data
+fluo.2 <- na.omit(fluo)
+
+# Reshape the data
+fluo_long <- pivot_longer(fluo.2, cols = starts_with("FLUO."), 
+                          names_to = "Fluo_Category", values_to = "Value")
+
+# Ensure DAG is a factor with specified levels
+fluo_long$DAG <- factor(fluo_long$DAG, levels = c("5", "7", "10", "14", "17"))
+
+
+fluo_long <- fluo_long %>%
+  # Remove the "FLUO." prefix and replace "No" with "None"
+  mutate(Fluo_Category = sub("FLUO.", "", Fluo_Category),
+         Fluo_Category = ifelse(Fluo_Category == "No", "None", Fluo_Category))
+
+fluo_long_summary <- fluo_long %>%
+  group_by(Treatment, DAG, Fluo_Category) %>%
+  summarise(Proportion = sum(Value), .groups = 'drop') %>%
+  mutate(Total = sum(Proportion)) %>%
+  mutate(Proportion = Proportion / Total)
+
+fluo_long_summary <- fluo_long_summary %>%
+  mutate(Treatment = case_when(
+    Treatment == "Control" ~ "C",
+    Treatment == "Prebiotic" ~ "P",
+    TRUE ~ Treatment  # This line is a fallback to keep other values unchanged
+  ))
+
+# Now plot with the calculated proportions
+ggplot(fluo_long_summary, aes(x = Treatment, y = Proportion, fill = Fluo_Category)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~ DAG, nrow = 1) +
+  labs(x = "Treatment", y = "Proportion of Fluorescence", fill = "Fluorescence Category") +
+  theme_bw() +
+  theme(legend.position = 'top', axis.title.x = element_blank(), 
+        axis.text.x = element_text(size = 12, color = 'black'),
+        axis.text.y = element_text(size = 12, color = 'black'), 
+        axis.title.y = element_text(size = 14, face = 'bold', color = 'black'), 
+        strip.text = element_text(face = 'bold', size = 16),
+        axis.ticks.x = element_blank(),
+        legend.title = element_text(color = 'black', face = 'bold', size = 14))
+
+# Save the plot
+ggsave("fluorescence.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+
+##Now for statistical analysis
+##Add sample number to fluo_long
+fluo_long <- fluo_long %>%
+  mutate(Sample = gl(n = ceiling(n() / 4), k = 4, length = n()))
+
+##Wilcoxon test
+# Function to perform the Wilcoxon test for each combination of Treatment, DAG, and Fluo_Category
+perform_wilcoxon_tests <- function(data) {
+  unique_combinations <- unique(data[, c("Treatment", "DAG", "Fluo_Category")])
+  results <- list()
+  
+  for (i in seq_len(nrow(unique_combinations))) {
+    comb <- unique_combinations[i, ]
+    
+    # Filter data for current combination
+    subset_data <- filter(data, DAG == comb$DAG, Fluo_Category == comb$Fluo_Category)
+
+    # Check if there are at least two levels of Treatment to compare
+    if (length(unique(subset_data$Treatment)) > 1) {
+      test_result <- wilcox.test(Value ~ Treatment, data = subset_data)
+      results[[paste(comb$DAG, comb$Fluo_Category, sep = "_")]] <- test_result
+    }
+  }
+
+  return(results)
+}
+
+# Apply the function to the fluo_long dataframe
+wilcoxon_test_results <- perform_wilcoxon_tests(fluo_long)
+
+# Print the results
+wilcoxon_test_results
+
+##Visualization
+##The first component requires manually extracting test results to maap to the plot
+# Manually creating the data frame
+wilcoxon_test_results_df <- data.frame(
+  DAG = c(rep(5, 4), rep(7, 4), rep(10, 4), rep(14, 4), rep(17, 4)),
+  Fluo_Category = rep(c("None", "Low", "Med", "High"), 5),
+  p_value = c(0.7148, 0.2172, 0.5039, NA, 
+              0.3217, 0.494, 0.3961, NA, 
+              0.6926, 0.2357, 0.1336, NA, 
+              0.6832, 0.4956, 0.2958, 0.5421, 
+              0.1485, 0.7748, 0.8016, 0.3079),
+  stringsAsFactors = FALSE
+)
+
+# Format the p-values as text
+wilcoxon_test_results_df$p_value_text <- ifelse(is.na(wilcoxon_test_results_df$p_value), 
+                                                paste(wilcoxon_test_results_df$Fluo_Category, "p-value = NA"),
+                                                paste(wilcoxon_test_results_df$Fluo_Category, "p-value =", wilcoxon_test_results_df$p_value))
+
+# Converting DAG to a factor in wilcoxon_test_results_df
+wilcoxon_test_results_df$DAG <- as.factor(wilcoxon_test_results_df$DAG)
+
+# Decrease the spacing between lines
+spacing <- 0.04  # Adjust the space between lines if needed
+# Calculate the new y positions
+#wilcoxon_test_results_df$y_position <- 1 + (1 - match(wilcoxon_test_results_df$Fluo_Category, c("High", "Med", "Low", "None"))) * spacing
+wilcoxon_test_results_df$y_position <- 1.02 + (match(wilcoxon_test_results_df$Fluo_Category, c("High", "Med", "Low", "None")) - 1) * spacing
+
+# We will also update the p_value_text column to make sure the expression is correct
+wilcoxon_test_results_df$p_value_text <- with(wilcoxon_test_results_df, 
+  ifelse(is.na(p_value), 
+         sprintf("%s ~ italic(p) ~ '-value = NA'", Fluo_Category), 
+         sprintf("%s ~ italic(p) ~ '-value =' ~ %.4f", Fluo_Category, p_value)))
+
+# Now update the ggplot code
+ggplot(fluo_long_summary, aes(x = Treatment, y = Proportion, fill = Fluo_Category)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +
+  geom_text(data = wilcoxon_test_results_df, 
+            aes(label = p_value_text, y = y_position), 
+            x = 1.5, 
+            parse = TRUE, 
+            inherit.aes = FALSE, 
+            fontface = "bold", 
+            vjust = 0,  # Adjust vertical justification
+            size = 2.5) +
+  #scale_y_continuous(labels = percent) + 
+  scale_y_continuous(
+    labels = percent,
+    breaks = seq(0, 1, by = 0.1),  # Set breaks at every 10%
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  coord_cartesian(ylim = c(0, 1.2), clip = "off", expand = FALSE) +  # Adjust ylim and turn off clipping
+  facet_wrap(~ DAG, nrow = 1) +
+  theme_bw() +
+  labs(x = "Treatment", y = "Proportion of Fluorescence", fill = "Fluorescence Category") +
+  theme(
+    legend.position = 'top', 
+    axis.title.x = element_blank(), 
+    axis.text.x = element_text(size = 12, color = 'black'),
+    axis.text.y = element_text(size = 12, color = 'black'), 
+    axis.title.y = element_text(size = 14, face = 'bold', color = 'black'), 
+    strip.text = element_text(face = 'bold', size = 16),
+    axis.ticks.x = element_blank(),
+    legend.title = element_text(color = 'black', face = 'bold', size = 14),
+    plot.margin = margin(5.5, 5.5, 5.5, 5.5))
+
+# Save the plot
+ggsave("fluorescence.2.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##NIR
+
+nir <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/nir.csv")
+
+# Remove missing data
+nir_2 <- na.omit(nir)
+
+# Reshape the data to long format
+nir_long <- pivot_longer(nir_2, cols = starts_with("NIR."), 
+                         names_to = "NIR_Category", values_to = "Value")
+
+# Ensure DAG is a factor with specified levels
+nir_long$DAG <- factor(nir_long$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Modify NIR_Category values by removing the "NIR." prefix and capitalizing
+nir_long <- nir_long %>%
+  mutate(NIR_Category = sub("NIR.", "", NIR_Category),
+         NIR_Category = tools::toTitleCase(NIR_Category))
+
+# Calculate proportions
+nir_long_summary <- nir_long %>%
+  group_by(Treatment, DAG, NIR_Category) %>%
+  summarise(Proportion = sum(Value), .groups = 'drop') %>%
+  mutate(Total = sum(Proportion)) %>%
+  mutate(Proportion = Proportion / Total)
+
+# Modify Treatment values for consistency
+nir_long_summary <- nir_long_summary %>%
+  mutate(Treatment = case_when(
+    Treatment == "Control" ~ "C",
+    Treatment == "Prebiotic" ~ "P",
+    TRUE ~ Treatment  # This line is a fallback to keep other values unchanged
+  ))
+
+nir_long_summary$NIR_Category <- factor(nir_long_summary$NIR_Category, levels = c("High", "Med", "Low"))
+
+# Now plot with the calculated proportions
+ggplot(nir_long_summary, aes(x = Treatment, y = Proportion, fill = NIR_Category)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~ DAG, nrow = 1) +
+  labs(x = "Treatment", y = "Proportion of NIR", fill = "NIR Category") +
+  theme_bw() +
+  theme(legend.position = 'top', axis.title.x = element_blank(), 
+        axis.text.x = element_text(size = 12, color = 'black'),
+axis.text.y = element_text(size = 12, color = 'black'),
+axis.title.y = element_text(size = 14, face = 'bold', color = 'black'),
+strip.text = element_text(face = 'bold', size = 16),
+axis.ticks.x = element_blank(),
+legend.title = element_text(color = 'black', face = 'bold', size = 14))
+
+# Save the plot
+ggsave("nir.1.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+## Add sample number to nir_long_summary
+nir_long_summary <- nir_long_summary %>%
+  mutate(Sample = gl(n = ceiling(nrow(nir_long_summary) / 3), k = 3, length = nrow(nir_long_summary)))
+
+## Wilcoxon test
+# Function to perform the Wilcoxon test for each combination of Treatment, DAG, and NIR_Category
+perform_wilcoxon_tests_nir <- function(data) {
+  unique_combinations <- unique(data[, c("Treatment", "DAG", "NIR_Category")])
+  results <- list()
+  
+  for (i in seq_len(nrow(unique_combinations))) {
+    comb <- unique_combinations[i, ]
+    
+    # Filter data for current combination
+    subset_data <- filter(data, DAG == comb$DAG, NIR_Category == comb$NIR_Category)
+
+    # Check if there are at least two levels of Treatment to compare
+    if (length(unique(subset_data$Treatment)) > 1) {
+      # Check the subset_data to debug
+      print(subset_data)
+      
+      test_result <- wilcox.test(Value ~ Treatment, data = subset_data)
+      results[[paste(comb$DAG, comb$NIR_Category, sep = "_")]] <- test_result
+    }
+  }
+
+  return(results)
+}
+
+# Apply the function to the nir_long_summary dataframe
+wilcoxon_test_results_nir <- perform_wilcoxon_tests_nir(nir_long)
+
+# Print the results
+wilcoxon_test_results_nir
+
+##These are hard to read on the plot. We will add all test results as a supplemental table instead. 
+```
+
+```{r}
+##Vis- Green and Yellow
+
+vis.green <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/vis.green.csv")
+
+# Remove missing data
+vis.green_2 <- na.omit(vis.green)
+
+# Reshape the data to long format
+vis_green_long <- pivot_longer(vis.green_2, cols = c(Green, Yellow),
+                         names_to = "Color", values_to = "Value")
+
+# Ensure DAG is a factor with specified levels
+vis_green_long$DAG <- factor(vis_green_long$DAG, levels = c("5", "7", "10", "14", "17"))
+
+# Calculate proportions
+vis_green_summary <- vis_green_long %>%
+  group_by(Treatment, DAG, Color) %>%
+  summarise(Proportion = sum(Value), .groups = 'drop') %>%
+  mutate(Total = sum(Proportion)) %>%
+  mutate(Proportion = Proportion / Total)
+
+# Modify Treatment values for consistency
+vis_green_summary <- vis_green_summary %>%
+  mutate(Treatment = case_when(
+    Treatment == "Control" ~ "C",
+    Treatment == "Prebiotic" ~ "P",
+    TRUE ~ Treatment  # This line is a fallback to keep other values unchanged
+  ))
+
+
+# Modify NIR_Category values by converting to factor
+vis_green_summary$Color <- factor(vis_green_summary$Color, levels = c("Green", "Yellow"))
+
+
+# Now plot with the calculated proportions
+ggplot(vis_green_summary, aes(x = Treatment, y = Proportion, fill = Color)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~ DAG, nrow = 1) +
+  labs(x = "Treatment", y = "Proportion of Color", fill = "Color") +
+  scale_fill_manual(values = c("#0CB702", "yellow")) +
+  theme_bw() +
+  theme(legend.position = 'top', axis.title.x = element_blank(), 
+        axis.text.x = element_text(size = 12, color = 'black'),
+        axis.text.y = element_text(size = 12, color = 'black'),
+        axis.title.y = element_text(size = 14, face = 'bold', color = 'black'),
+        strip.text = element_text(face = 'bold', size = 16),
+        axis.ticks.x = element_blank(),
+        legend.title = element_text(color = 'black', face = 'bold', size = 14))
+
+# Save the plot
+ggsave("visible.1.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+## Add sample number to vis_green_long
+vis_green_long <- vis_green_long %>%
+  mutate(Sample = gl(n = ceiling(nrow(vis_green_long) / 2), k = 2, length = nrow(vis_green_long)))
+
+## Wilcoxon test
+# Function to perform the Wilcoxon test for each combination of Treatment, DAG, and NIR_Category
+perform_wilcoxon_tests_vis_green <- function(data) {
+  unique_combinations <- unique(data[, c("Treatment", "DAG", "Color")])
+  results <- list()
+  
+  for (i in seq_len(nrow(unique_combinations))) {
+    comb <- unique_combinations[i, ]
+    
+    # Filter data for current combination
+    subset_data <- filter(data, DAG == comb$DAG, Color == comb$Color)
+
+    # Check if there are at least two levels of Treatment to compare
+    if (length(unique(subset_data$Treatment)) > 1) {
+      # Check the subset_data to debug
+      print(subset_data)
+      
+      test_result <- wilcox.test(Value ~ Treatment, data = subset_data)
+      results[[paste(comb$DAG, comb$Color, sep = "_")]] <- test_result
+    }
+  }
+
+  return(results)
+}
+
+# Apply the function to the vis_green_long dataframe
+wilcoxon_test_results_vis_green <- perform_wilcoxon_tests_vis_green(vis_green_long)
+
+# Print the results
+wilcoxon_test_results_vis_green
+
+```
+
+```{r}
+##Load data for physical measurements following the second transplantation
+Leaves <- read.csv("~/Documents/AgriGro_Rice/Leaves.csv")
+Panicle <- read.csv("~/Documents/AgriGro_Rice/Panicle.csv")
+Plant_Biomass.2 <- read.csv("~/Documents/AgriGro_Rice/Plant_Biomass.2.csv")
+Plant_height <- read.csv("~/Documents/AgriGro_Rice/Plant_height.csv")
+Root_biomass <- read.csv("~/Documents/AgriGro_Rice/Root_biomass.csv")
+Seed_Yield.2 <- read.csv("~/Documents/AgriGro_Rice/Seed_Yield.2.csv")
+Tiller <- read.csv("~/Documents/AgriGro_Rice/Tiller.csv")
+
+```
+
+```{r}
+##Let's start with Leaves
+##For these data, let's subset by time and see if we observe departure from normality
+##This output will guide the selection of a parametric or non-parametric test and apply the correct test for each Time
+Leaves$DAG <- as.factor(Leaves$DAG)
+
+# List to hold results
+results_leaves <- list()
+
+# Unique DAG levels
+DAG_levels <- unique(Leaves$DAG)
+
+# Iterate over each DAG level
+for (DAG in DAG_levels) {
+    # Subset data for this DAG
+    data_subset <- Leaves[Leaves$DAG == DAG, ]
+    
+    # Convert Treatment to a factor
+    data_subset$Treatment <- factor(data_subset$Treatment)
+    
+    # Perform Shapiro-Wilk test for normality
+    shapiro_test <- shapiro.test(data_subset$Level)
+    
+    # Perform Levene's test for homogeneity of variances
+    levene_test <- leveneTest(Level ~ Treatment, data = data_subset)
+    
+    # Check if data meets assumptions for parametric tests
+    if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+        # Check the number of levels in Treatment
+        if (length(levels(data_subset$Treatment)) == 2) {
+            # Perform Wilcoxon test
+            wilcox_result <- wilcox.test(Level ~ Treatment, data = data_subset)
+            results_leaves[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon", result = wilcox_result)
+        } else {
+            warning(paste("DAG", DAG, ": Treatment does not have two levels."))
+        }
+    } else {
+        # Perform T-test (since there are only two treatments)
+        ttest_result <- t.test(Level ~ Treatment, data = data_subset)
+        results_leaves[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+    }
+}
+
+# Output the results
+results_leaves ##No significance 
+
+##Visualize
+# Summarize the data
+leaves_summary <- Leaves %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Level),
+    SEM = sd(Level) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create the line plot
+ggplot(leaves_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Leaf Number", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("leaves_plot.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Tiller
+Tiller$DAG <- as.factor(Tiller$DAG)
+
+# List to hold results
+results_tiller <- list()
+
+# Unique DAG levels
+unique_DAGs <- unique(Tiller$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs) {
+    # Subset data for this DAG
+    data_subset <- Tiller[Tiller$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Level)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Level ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Level ~ Treatment, data = data_subset)
+            results_tiller[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Level ~ Treatment, data = data_subset)
+            results_tiller[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results
+print(results_tiller)
+
+# Summarize the data to obtain Mean and SEM for each Treatment and DAG
+tiller_summary <- Tiller %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Level),
+    SEM = sd(Level) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers
+significance_markers_tiller <- data.frame(DAG = character(), 
+                                          Significance = character(), 
+                                          y_position = numeric())
+
+# Iterate over results_tiller to extract significance markers
+for (DAG_level in names(results_tiller)) {
+  result <- results_tiller[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(tiller_summary$Mean[tiller_summary$DAG == DAG_clean] + max(tiller_summary$SEM[tiller_summary$DAG == DAG_clean]))
+    significance_markers_tiller <- rbind(significance_markers_tiller, 
+                                         data.frame(DAG = DAG_clean, 
+                                                    Significance = significance, 
+                                                    y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_tiller to factor to align with tiller_summary
+significance_markers_tiller$DAG <- factor(significance_markers_tiller$DAG, levels = levels(tiller_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(tiller_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_tiller, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Tiller Number", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("tiller_plot.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Panicle
+Panicle$DAG <- as.factor(Panicle$DAG)
+
+# List to hold results
+results_panicle <- list()
+
+# Iterate over each DAG level
+for (DAG in unique(Panicle$DAG)) {
+    # Subset data for this DAG
+    data_subset <- filter(Panicle, DAG == !!DAG)
+    
+    # Print number of observations for this DAG level
+    print(paste("Number of observations for DAG", DAG, ":", nrow(data_subset)))
+    
+    # Shapiro-Wilk test for normality
+    shapiro_test <- shapiro.test(data_subset$Level)
+    print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+    # Levene's test for homogeneity of variances
+    levene_test <- leveneTest(Level ~ Treatment, data = data_subset)
+    print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+    # Determine the type of test based on p-values
+    if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+        # Wilcoxon rank sum test
+        wilcox_result <- wilcox.test(Level ~ Treatment, data = data_subset)
+        results_panicle[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+    } else {
+        # T-test
+        ttest_result <- t.test(Level ~ Treatment, data = data_subset)
+        results_panicle[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+    }
+}
+
+# Output the results
+print(results_panicle)
+
+# Summarize the data to obtain Mean and SEM for each Treatment and DAG
+panicle_summary <- Panicle %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Level),
+    SEM = sd(Level) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers
+significance_markers <- data.frame(DAG = character(), 
+                                   Significance = character(), 
+                                   y_position = numeric())
+
+# Iterate over results_panicle to extract significance markers
+for (DAG_level in names(results_panicle)) {
+  result <- results_panicle[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(panicle_summary$Mean[panicle_summary$DAG == DAG_clean] + max(panicle_summary$SEM[panicle_summary$DAG == DAG_clean]))
+    significance_markers <- rbind(significance_markers, 
+                                  data.frame(DAG = DAG_clean, 
+                                             Significance = significance, 
+                                             y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers to factor to align with panicle_summary
+significance_markers$DAG <- factor(significance_markers$DAG, levels = levels(panicle_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(panicle_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 1.2,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Panicle Number", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("panicle_plot.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Plant height
+# Convert DAG to a factor in Plant_height dataframe
+Plant_height$DAG <- as.factor(Plant_height$DAG)
+
+# List to hold results
+results_plant_height <- list()
+
+# Unique DAG levels in the Plant_height dataframe
+unique_DAGs_plant_height <- unique(Plant_height$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_plant_height) {
+    # Subset data for this DAG
+    data_subset <- Plant_height[Plant_height$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Level)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Level ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Level ~ Treatment, data = data_subset)
+            results_plant_height[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Level ~ Treatment, data = data_subset)
+            results_plant_height[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results
+print(results_plant_height)
+
+# Summarize the data to obtain Mean and SEM for each Treatment and DAG in Plant_height
+plant_height_summary <- Plant_height %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Level),
+    SEM = sd(Level) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for Plant_height
+significance_markers_plant_height <- data.frame(DAG = character(), 
+                                                Significance = character(), 
+                                                y_position = numeric())
+
+# Iterate over results_plant_height to extract significance markers
+for (DAG_level in names(results_plant_height)) {
+  result <- results_plant_height[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(plant_height_summary$Mean[plant_height_summary$DAG == DAG_clean] + max(plant_height_summary$SEM[plant_height_summary$DAG == DAG_clean]))
+    significance_markers_plant_height <- rbind(significance_markers_plant_height, 
+                                               data.frame(DAG = DAG_clean, 
+                                                          Significance = significance, 
+                                                          y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_plant_height to factor to align with plant_height_summary
+significance_markers_plant_height$DAG <- factor(significance_markers_plant_height$DAG, levels = levels(plant_height_summary$DAG))
+
+# Create the line plot with significance markers for Plant_height
+ggplot(plant_height_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_plant_height, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.3,
+            fontface=2, size = 6) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Plant Height (cm)", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("height_plot.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Aboveground Biomass
+
+# List to hold results for Plant_Biomass.2
+results_plant_biomass_2 <- list()
+
+# Perform Shapiro-Wilk test for normality on Plant_Biomass.2
+shapiro_test_plant_biomass_2 <- shapiro.test(Plant_Biomass.2$Level)
+
+# Perform Levene's test for homogeneity of variances on Plant_Biomass.2
+levene_test_plant_biomass_2 <- leveneTest(Level ~ Treatment, data = Plant_Biomass.2)
+
+# Print test results for Plant_Biomass.2
+print(paste("Shapiro-Wilk test p-value for Plant_Biomass.2:", shapiro_test_plant_biomass_2$p.value))
+print(paste("Levene's test p-value for Plant_Biomass.2:", levene_test_plant_biomass_2$"Pr(>F)"[1]))
+
+# Determine the type of test based on p-values for Plant_Biomass.2
+if (shapiro_test_plant_biomass_2$p.value < 0.05 || levene_test_plant_biomass_2$"Pr(>F)"[1] < 0.05) {
+    # Wilcoxon rank sum test for Plant_Biomass.2
+    wilcox_result_plant_biomass_2 <- wilcox.test(Level ~ Treatment, data = Plant_Biomass.2)
+    results_plant_biomass_2$test <- "Wilcoxon rank sum"
+    results_plant_biomass_2$result <- wilcox_result_plant_biomass_2
+} else {
+    # T-test for Plant_Biomass.2
+    ttest_result_plant_biomass_2 <- t.test(Level ~ Treatment, data = Plant_Biomass.2)
+    results_plant_biomass_2$test <- "T-test"
+    results_plant_biomass_2$result <- ttest_result_plant_biomass_2
+}
+
+# Output the results for Plant_Biomass.2
+print(results_plant_biomass_2) ##W = 79, p-value = 0.2703
+
+##Visualize and add p-value since almost significant
+ggplot(Plant_Biomass.2, aes(x = Treatment, y = Level, fill = Treatment)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_dotplot(shape = 21, color = "black", size = 4, show.legend = FALSE, stackdir='center', binaxis='y') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Aboveground Biomass (g)", color = "Treatment") +
+   annotate("text", x = Inf, y = 0, label = "paste('Wilcoxon test: W = 79,', ~italic(p)~'= 0.2703')", 
+           parse = TRUE, hjust = 1.1, vjust = 0, size = 5)
+
+# Save the plot
+ggsave("biomass_plot.2.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Seed Yield
+
+# List to hold results for Seed_Yield.2
+results_seed_yield_2 <- list()
+
+# Perform Shapiro-Wilk test for normality on Seed_Yield.2
+shapiro_test_seed_yield_2 <- shapiro.test(Seed_Yield.2$Level)
+
+# Perform Levene's test for homogeneity of variances on Seed_Yield.2
+levene_test_seed_yield_2 <- leveneTest(Level ~ Treatment, data = Seed_Yield.2)
+
+# Print test results for Seed_Yield.2
+print(paste("Shapiro-Wilk test p-value for Seed_Yield.2:", shapiro_test_seed_yield_2$p.value))
+print(paste("Levene's test p-value for Seed_Yield.2:", levene_test_seed_yield_2$"Pr(>F)"[1]))
+
+# Determine the type of test based on p-values for Seed_Yield.2
+if (shapiro_test_seed_yield_2$p.value < 0.05 || levene_test_seed_yield_2$"Pr(>F)"[1] < 0.05) {
+    # Wilcoxon rank sum test for Seed_Yield.2
+    wilcox_result_seed_yield_2 <- wilcox.test(Level ~ Treatment, data = Seed_Yield.2)
+    results_seed_yield_2$test <- "Wilcoxon rank sum"
+    results_seed_yield_2$result <- wilcox_result_seed_yield_2
+} else {
+    # T-test for Seed_Yield.2
+    ttest_result_seed_yield_2 <- t.test(Level ~ Treatment, data = Seed_Yield.2)
+    results_seed_yield_2$test <- "T-test"
+    results_seed_yield_2$result <- ttest_result_seed_yield_2
+}
+
+# Output the results for Seed_Yield.2
+print(results_seed_yield_2) #W = 47, p-value = 0.0198
+
+##Visualize and add p-value since almost significant
+ggplot(Seed_Yield.2, aes(x = Treatment, y = Level, fill = Treatment)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_dotplot(shape = 21, color = "black", size = 4, show.legend = FALSE, stackdir='center', binaxis='y') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Seed Yield (g)", color = "Treatment") +
+   annotate("text", x = Inf, y = 0, label = "paste('Wilcoxon test: W = 47,', ~italic(p)~'= 0.0198')", 
+           parse = TRUE, hjust = 1.01, vjust = 0, size = 5)
+
+# Save the plot
+ggsave("seed_plot.2.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Photosynthetic efficiency
+Photosynthesis.ctrl <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/Photosynthesis.ctrl.csv")
+Photosynthesis.trt <- read.csv("~/Documents/AgriGro_Rice/Photosynthesis.trt.csv")
+
+# Remove the last three columns from Photosynthesis.ctrl
+Photosynthesis.ctrl_updated <- Photosynthesis.ctrl[ -c(8:10) ]
+
+# Rename the 6th column to "Treatment" in Photosynthesis.ctrl_updated
+names(Photosynthesis.ctrl_updated)[6] <- "Treatment"
+
+# Rename the 6th column to "Treatment" in Photosynthesis.trt
+names(Photosynthesis.trt)[6] <- "Treatment"
+
+# Combine the updated Photosynthesis.ctrl with Photosynthesis.trt
+combined_Photosynthesis <- rbind(Photosynthesis.ctrl_updated, Photosynthesis.trt)
+
+combined_Photosynthesis <- combined_Photosynthesis %>%
+  mutate(DAG = case_when(
+    grepl("11/11", time) ~ 49,
+    grepl("11/18", time) ~ 56,
+    grepl("11/23", time) ~ 61,
+    grepl("12/2", time) ~ 70,
+    grepl("12/9", time) ~ 77,
+    grepl("12/14", time) ~ 82,
+    TRUE ~ NA_integer_ # Assign NA for dates not matching any condition
+  ))
+
+combined_Photosynthesis <- combined_Photosynthesis %>%
+  mutate(Treatment = ifelse(Treatment == "Treatment", "Prebiotic", Treatment))
+
+combined_Photosynthesis <- na.omit(combined_Photosynthesis)
+
+##Let's do statistics and visualization in subsequent chunks
+
+```
+
+```{r}
+##Phi2
+combined_Photosynthesis$DAG <- as.factor(combined_Photosynthesis$DAG)
+
+# List to hold results
+results_combined_photosynthesis <- list()
+
+# Unique DAG levels in the combined_Photosynthesis dataframe
+unique_DAGs_combined_photosynthesis <- unique(combined_Photosynthesis$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_combined_photosynthesis) {
+    # Subset data for this DAG
+    data_subset <- combined_Photosynthesis[combined_Photosynthesis$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Phi2)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Phi2 ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Phi2 ~ Treatment, data = data_subset)
+            results_combined_photosynthesis[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Phi2 ~ Treatment, data = data_subset)
+            results_combined_photosynthesis[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results
+print(results_combined_photosynthesis)
+
+# Summarize the data to obtain Mean and SEM for Phi2 for each Treatment and DAG
+phi2_summary <- combined_Photosynthesis %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Phi2),
+    SEM = sd(Phi2) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for Phi2
+significance_markers_phi2 <- data.frame(DAG = character(), 
+                                        Significance = character(), 
+                                        y_position = numeric())
+
+# Iterate over results for Phi2 to extract significance markers
+for (DAG_level in names(results_combined_photosynthesis)) {
+  result <- results_combined_photosynthesis[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(phi2_summary$Mean[phi2_summary$DAG == DAG_clean] + max(phi2_summary$SEM[phi2_summary$DAG == DAG_clean]))
+    significance_markers_phi2 <- rbind(significance_markers_phi2, 
+                                       data.frame(DAG = DAG_clean, 
+                                                  Significance = significance, 
+                                                  y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_phi2 to factor to align with phi2_summary
+significance_markers_phi2$DAG <- factor(significance_markers_phi2$DAG, levels = levels(phi2_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(phi2_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_phi2, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 1,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.3),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Effective Quantum Yield of PSII\n(ΦII)", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("phi2_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##PhiNPQ
+
+# List to hold results for PhiNPQ
+results_phiNPQ <- list()
+
+# Unique DAG levels in the combined_Photosynthesis dataframe
+unique_DAGs_phiNPQ <- unique(combined_Photosynthesis$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_phiNPQ) {
+    # Subset data for this DAG
+    data_subset <- combined_Photosynthesis[combined_Photosynthesis$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$PhiNPQ)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(PhiNPQ ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(PhiNPQ ~ Treatment, data = data_subset)
+            results_phiNPQ[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(PhiNPQ ~ Treatment, data = data_subset)
+            results_phiNPQ[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for PhiNPQ
+print(results_phiNPQ)
+
+# Summarize the data to obtain Mean and SEM for PhiNPQ for each Treatment and DAG
+phiNPQ_summary <- combined_Photosynthesis %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(PhiNPQ),
+    SEM = sd(PhiNPQ) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for PhiNPQ
+significance_markers_phiNPQ <- data.frame(DAG = character(), 
+                                          Significance = character(), 
+                                          y_position = numeric())
+
+# Iterate over results for PhiNPQ to extract significance markers
+for (DAG_level in names(results_phiNPQ)) {
+  result <- results_phiNPQ[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(phiNPQ_summary$Mean[phiNPQ_summary$DAG == DAG_clean] + max(phiNPQ_summary$SEM[phiNPQ_summary$DAG == DAG_clean]))
+    significance_markers_phiNPQ <- rbind(significance_markers_phiNPQ, 
+                                         data.frame(DAG = DAG_clean, 
+                                                    Significance = significance, 
+                                                    y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_phiNPQ to factor to align with phiNPQ_summary
+significance_markers_phiNPQ$DAG <- factor(significance_markers_phiNPQ$DAG, levels = levels(phiNPQ_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(phiNPQ_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_phiNPQ, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.5,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 14, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Quantum Yield of Regulated Energy\nDissipation in PSII (ΦNPQ)", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("npq_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+###PhiNO
+# List to hold results for PhiNO
+results_phiNO <- list()
+
+# Unique DAG levels in the combined_Photosynthesis dataframe
+unique_DAGs_combined_photosynthesis <- unique(combined_Photosynthesis$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_combined_photosynthesis) {
+    # Subset data for this DAG
+    data_subset <- combined_Photosynthesis[combined_Photosynthesis$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$PhiNO)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(PhiNO ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(PhiNO ~ Treatment, data = data_subset)
+            results_phiNO[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(PhiNO ~ Treatment, data = data_subset)
+            results_phiNO[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for PhiNO
+print(results_phiNO)
+
+# Summarize the data to obtain Mean and SEM for PhiNO for each Treatment and DAG
+phiNO_summary <- combined_Photosynthesis %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(PhiNO),
+    SEM = sd(PhiNO) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for PhiNO
+significance_markers_phiNO <- data.frame(DAG = character(), 
+                                          Significance = character(), 
+                                          y_position = numeric())
+
+# Iterate over results for PhiNO to extract significance markers
+for (DAG_level in names(results_phiNO)) {
+  result <- results_phiNO[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(phiNO_summary$Mean[phiNO_summary$DAG == DAG_clean] + max(phiNO_summary$SEM[phiNO_summary$DAG == DAG_clean]))
+    significance_markers_phiNO <- rbind(significance_markers_phiNO, 
+                                        data.frame(DAG = DAG_clean, 
+                                                   Significance = significance, 
+                                                   y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_phiNO to factor to align with phiNO_summary
+significance_markers_phiNO$DAG <- factor(significance_markers_phiNO$DAG, levels = levels(phiNO_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(phiNO_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_phiNO, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.5,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.225, 0.3),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Quantum Yield of Non-regulated\nEnergy Dissipation in PSII (ΦNO)", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("phiNO_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Relative chlorophyll
+# List to hold results for Relative Chlorophyll
+results_relative_chlorophyll <- list()
+
+# Unique DAG levels in the combined_Photosynthesis dataframe
+unique_DAGs_combined_photosynthesis <- unique(combined_Photosynthesis$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_combined_photosynthesis) {
+    # Subset data for this DAG
+    data_subset <- combined_Photosynthesis[combined_Photosynthesis$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$Relative.Chlorophyll)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(Relative.Chlorophyll ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(Relative.Chlorophyll ~ Treatment, data = data_subset)
+            results_relative_chlorophyll[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(Relative.Chlorophyll ~ Treatment, data = data_subset)
+            results_relative_chlorophyll[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for Relative Chlorophyll
+print(results_relative_chlorophyll)
+
+# Summarize the data to obtain Mean and SEM for Relative Chlorophyll for each Treatment and DAG
+relative_chlorophyll_summary <- combined_Photosynthesis %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(Relative.Chlorophyll),
+    SEM = sd(Relative.Chlorophyll) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Create a dataframe for significance markers for Relative Chlorophyll
+significance_markers_relative_chlorophyll <- data.frame(DAG = character(), 
+                                                        Significance = character(), 
+                                                        y_position = numeric())
+
+# Iterate over results for Relative Chlorophyll to extract significance markers
+for (DAG_level in names(results_relative_chlorophyll)) {
+  result <- results_relative_chlorophyll[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(relative_chlorophyll_summary$Mean[relative_chlorophyll_summary$DAG == DAG_clean] + max(relative_chlorophyll_summary$SEM[relative_chlorophyll_summary$DAG == DAG_clean]))
+    significance_markers_relative_chlorophyll <- rbind(significance_markers_relative_chlorophyll, 
+                                                      data.frame(DAG = DAG_clean, 
+                                                                 Significance = significance, 
+                                                                 y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_relative_chlorophyll to factor to align with relative_chlorophyll_summary
+significance_markers_relative_chlorophyll$DAG <- factor(significance_markers_relative_chlorophyll$DAG, levels = levels(relative_chlorophyll_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(relative_chlorophyll_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_relative_chlorophyll, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.5,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.225, 0.3),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Relative Chlorophyll Content", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("chlorophyll_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##NPQt
+NPQt <- read.csv("~/Documents/AgriGro_Rice/AgriGro_Rice_Analysis/NPQt.csv")
+NPQt$DAG <- as.factor(NPQt$DAG)
+
+# List to hold results for NPQt
+results_NPQt <- list()
+
+# Unique DAG levels in the NPQt dataframe
+unique_DAGs_NPQt <- unique(NPQt$DAG)
+
+# Iterate over each DAG level
+for (DAG in unique_DAGs_NPQt) {
+    # Subset data for this DAG
+    data_subset <- NPQt[NPQt$DAG == DAG, ]
+    
+    # Print number of observations for this DAG level
+    num_observations <- nrow(data_subset)
+    print(paste("Number of observations for DAG", DAG, ":", num_observations))
+    
+    # Check if the subset is not empty
+    if (num_observations > 0) {
+        # Shapiro-Wilk test for normality
+        shapiro_test <- shapiro.test(data_subset$NPQt)
+        print(paste("Shapiro-Wilk test p-value for DAG", DAG, ":", shapiro_test$p.value))
+
+        # Levene's test for homogeneity of variances
+        levene_test <- leveneTest(NPQt ~ Treatment, data = data_subset)
+        print(paste("Levene's test p-value for DAG", DAG, ":", levene_test$"Pr(>F)"[1]))
+
+        # Determine the type of test based on p-values
+        if (shapiro_test$p.value < 0.05 || levene_test$"Pr(>F)"[1] < 0.05) {
+            # Wilcoxon rank sum test
+            wilcox_result <- wilcox.test(NPQt ~ Treatment, data = data_subset)
+            results_NPQt[[paste("DAG", DAG, sep = "_")]] <- list(test = "Wilcoxon rank sum", result = wilcox_result)
+        } else {
+            # T-test
+            ttest_result <- t.test(NPQt ~ Treatment, data = data_subset)
+            results_NPQt[[paste("DAG", DAG, sep = "_")]] <- list(test = "T-test", result = ttest_result)
+        }
+    } else {
+        print(paste("No data available for DAG", DAG))
+    }
+}
+
+# Output the results for NPQt
+print(results_NPQt)
+
+# Summarize the data to obtain Mean and SEM for NPQt for each Treatment and DAG
+NPQt_summary <- NPQt %>%
+  group_by(Treatment, DAG) %>%
+  summarize(
+    Mean = mean(NPQt),
+    SEM = sd(NPQt) / sqrt(n()),
+    .groups = 'drop'
+  )
+NPQt_summary$DAG <- as.factor(NPQt_summary$DAG)
+
+# Create a dataframe for significance markers for NPQt
+significance_markers_NPQt <- data.frame(DAG = character(), 
+                                        Significance = character(), 
+                                        y_position = numeric())
+
+# Iterate over results for NPQt to extract significance markers
+for (DAG_level in names(results_NPQt)) {
+  result <- results_NPQt[[DAG_level]]
+  
+  # Extract p-value and determine significance level
+  p_value <- result$result$p.value
+  significance <- ifelse(p_value < 0.001, "***", 
+                         ifelse(p_value < 0.01, "**", 
+                                ifelse(p_value < 0.05, "*", "")))
+  
+  # Only add rows for significant results
+  if (significance != "") {
+    DAG_clean <- gsub("DAG_", "", DAG_level) # Clean up DAG_level
+    max_y <- max(NPQt_summary$Mean[NPQt_summary$DAG == DAG_clean] + max(NPQt_summary$SEM[NPQt_summary$DAG == DAG_clean]))
+    significance_markers_NPQt <- rbind(significance_markers_NPQt, 
+                                       data.frame(DAG = DAG_clean, 
+                                                  Significance = significance, 
+                                                  y_position = max_y))
+  }
+}
+
+# Convert DAG in significance_markers_NPQt to factor to align with NPQt_summary
+significance_markers_NPQt$DAG <- factor(significance_markers_NPQt$DAG, levels = levels(NPQt_summary$DAG))
+
+# Create the line plot with significance markers
+ggplot(NPQt_summary, aes(x = DAG, y = Mean, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2) +
+  geom_point(size = 1.5) +
+  geom_text(data = significance_markers_NPQt, aes(x = DAG, y = y_position, label = Significance), inherit.aes = FALSE, vjust = 0.5,
+            fontface=2, size = 8) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.95),
+    legend.justification = c(1, 1),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Non-photochemical Quenching\nCoefficient (NPQt)", x = "Days After Germination (DAG)", color = "Treatment")
+
+# Save the plot
+ggsave("NPQt_plot.png", width = 6.5, height = 4, units = "in", dpi = 900)
+
+```
+
+```{r}
+##Root biomass
+# List to hold results for Root_biomass
+results_root_biomass <- list()
+
+# Perform Shapiro-Wilk test for normality on Root_biomass
+shapiro_test_root_biomass <- shapiro.test(Root_biomass$Level)
+
+# Perform Levene's test for homogeneity of variances on Root_biomass
+levene_test_root_biomass <- leveneTest(Level ~ Treatment, data = Root_biomass)
+
+# Print test results for Root_biomass
+print(paste("Shapiro-Wilk test p-value for Root_biomass:", shapiro_test_root_biomass$p.value))
+print(paste("Levene's test p-value for Root_biomass:", levene_test_root_biomass$"Pr(>F)"[1]))
+
+# Determine the type of test based on p-values for Root_biomass
+if (shapiro_test_root_biomass$p.value < 0.05 || levene_test_root_biomass$"Pr(>F)"[1] < 0.05) {
+    # Wilcoxon rank sum test for Root_biomass
+    wilcox_result_root_biomass <- wilcox.test(Level ~ Treatment, data = Root_biomass)
+    results_root_biomass$test <- "Wilcoxon rank sum"
+    results_root_biomass$result <- wilcox_result_root_biomass
+} else {
+    # T-test for Root_biomass
+    ttest_result_root_biomass <- t.test(Level ~ Treatment, data = Root_biomass)
+    results_root_biomass$test <- "T-test"
+    results_root_biomass$result <- ttest_result_root_biomass
+}
+
+# Output the results for Root_biomass
+print(results_root_biomass) #t = -1.4187, df = 23.173, p-value = 0.1693
+
+##Visualize and add p-value since almost significant
+ggplot(Root_biomass, aes(x = Treatment, y = Level, fill = Treatment)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_dotplot(shape = 21, color = "black", size = 4, show.legend = FALSE, stackdir='center', binaxis='y') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.2, 0.3),
+    legend.justification = c(1, 1),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(size = 14, color = "black"),
+    axis.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.background = element_blank(),
+    legend.box.background = element_blank()) +
+  labs(y = "Root Biomass (g)", color = "Treatment") +
+   annotate("text", x = Inf, y = 0, label = "paste('t = -1.4187,', ~italic(p)~'= 0.1693')", 
+           parse = TRUE, hjust = 1.1, vjust = 0, size = 5)
+
+# Save the plot
+ggsave("root_plot.png", width = 6.5, height = 3.5, units = "in", dpi = 900)
+
+```
